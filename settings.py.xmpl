@@ -1,0 +1,5 @@
+SETTINGS = {
+    'OEP_API_TOKEN': '',
+    'OEP_PROTOCOL': 'https',
+    'OEP_HOST': 'openenergyplatform.org',
+}

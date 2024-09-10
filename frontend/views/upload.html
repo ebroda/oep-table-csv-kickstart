@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>OEP CSV Upload</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+</head>
+<body>
+<div class="container">
+    <div class="row">
+        <div class="col-12 mt-3">
+            <h2>OEP CSV Import</h2>
+            <br/>
+        </div>
+    </div>
+
+    <div class="row mb-2">
+        <div class="col-2">CSV-Datei</div>
+        <div class="col-4">{{ form.file(class_='form-control') }}</div>
+    </div>
+
+    <div class="row mb-2">
+        <div class="col-2">Encoding</div>
+        <div class="col-4">{{ form.encoding(class_='form-select') }}</div>
+    </div>
+
+    <div class="row">
+        <div class="col-2">Trennzeichen</div>
+        <div class="col-4">{{ form.seperator(class_='form-control') }}</div>
+    </div>
+
+    <div class="row">
+        <div class="col-12">
+            <hr/>
+        </div>
+
+        <div class="col-12 mt-5">
+            <h2>Erste zwei Zeilen der Datei</h2>
+            <div id="firstLine" class="border p-3" style="line-break: anywhere"></div>
+        </div>
+
+    </div>
+    <form method="post" action="/upload" id="tableForm">
+        {{form.csrf_token()}}
+        <div class="row mt-5">
+            <div class="col-2">Tabellenname</div>
+            <div class="col-4">
+                <div class="form-group">
+                    <input type="text" id="table_name" name="table_name" class="form-control"/>
+                    <small class="text-muted">Valid table name (only lower case letters, numbers and underscore, max. 50 chars)</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12 mt-5">
+                <h2>Spalten in der CSV-Datei</h2>
+                Dokumentation zu Datentypen:
+        <a href="https://www.postgresql.org/docs/current/datatype-numeric.html">Zahlen</a>,
+        <a href="https://www.postgresql.org/docs/current/datatype-datetime.html">Datum & Zeit</a>,
+        <a href="https://www.postgresql.org/docs/current/datatype-character.html">Text</a>
+
+                <table class="table">
+                    <thead>
+                    <tr>
+                        <th>Spalte in CSV</th>
+                        <th>Datenbank-Spalte</th>
+                        <th>Beispiel</th>
+                        <th>Datentyp</th>
+                        <th>Datentyp</th>
+                        <th>Nullable</th>
+                        <!--<th title="primary key">PK</th>-->
+                    </tr>
+                    </thead>
+                    <tbody id="outputTable">
+
+                    </tbody>
+                </table>
+                <input type="hidden" name="total_rows" id="total_rows" value="-1" />
+                <button class="btn btn-success" type="submit">Tabelle erstellen in OEP</button>
+            </div>
+        </div>
+
+        <div class="mt-3" id="result">
+
+        </div>
+    </form>
+</div>
+
+<br /><br />
+
+<script src="{{ url_for('static', filename='csv.js') }}"></script>
+
+<script>
+    let seperator_field = document.getElementById('seperator');
+    let encoding_field = document.getElementById('encoding');
+    let file_field = document.getElementById('file');
+
+    file_field.addEventListener('change', read_csv);
+    seperator_field.addEventListener('keyup', read_csv);
+    encoding_field.addEventListener('keyup', read_csv);
+
+    const resultDiv = document.getElementById('result');
+
+    function read_csv() {
+
+        resultDiv.innerHTML = '';
+
+        if (seperator_field.value.length !== 1 || file_field.files[0] === undefined)
+            return;
+
+        let fr = new FileReader();
+        fr.onload = function (e) {
+            const text = e.target.result;
+            const rows = text.split('\n');
+            const line1 = rows[0];
+
+            let line2 = '';
+            if (rows.length > 1)
+                line2 = rows[1];
+
+            document.getElementById('firstLine').innerHTML = line1 + '<hr />' + line2;
+            data = parse(line1 + '\n' + line2, { separator: seperator_field.value });
+            put_data_to_table(data);
+        };
+
+        const file = file_field.files[0];
+        // read only first 16k characters of file to have an identical runtime; hopefully this is enough for all csv files
+        // if not: increase this number
+        let blob = file.slice(0, 16384);
+        fr.readAsText(blob, encoding_field.value);
+
+        document.getElementById('table_name').value = processString(file.name);
+    }
+
+    function processString(input) {
+        return input
+            .toLowerCase()
+            .replace(/\s+/g, '_')
+            .replace(/-/g, '_')
+            .replace(/[^\x00-\x7F]/g, (char) => {
+    const replacements = {'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ß': 'ss',};
+    return replacements[char] || '';
+            })
+            .replace(/\.csv$/, '')
+            .substring(0, 50);
+    }
+
+    document.getElementById('tableForm').addEventListener('submit', function(event) {
+        event.preventDefault();
+
+        fetch('/upload', {
+            method: 'POST',
+            body: new FormData(this),
+        })
+            .then(response => response.json())
+            .then(data => {
+
+                if (data.success) {
+                    resultDiv.innerHTML = '<div class="alert alert-success">Die Tabelle wurde erfolgreich angelegt.<br /><a href="' + data.oep_url + '" class="btn btn-success mt-1" target="oep">Jetzt Daten hochladen</a></div>';
+                } else {
+                    if (data.exception.name === 'OepTableAlreadyExistsException') {
+                        resultDiv.innerHTML = '<div class="alert alert-danger">Fehler: Es existiert bereits eine Tabelle mit diesem Namen.</div>';
+                    } else {
+                        resultDiv.innerHTML = '<div class="alert alert-danger">Fehler (' + data.exception.name + '): ' + data.exception.msg + '</div>';
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Fehler beim Abrufen:', error);
+                document.getElementById('result').innerHTML = '<div class="alert alert-danger">Fehler beim Erstellen der Tabelle: ' + error + '</div>';
+            });
+    });
+
+    function put_data_to_table(data) {
+        const table = document.getElementById('outputTable');
+        table.innerHTML = ''; // Tabelle zurücksetzen
+        let i = 0;
+        data[0].forEach(cell => {
+            const newRow = table.insertRow();
+            const cell1 = newRow.insertCell();
+            let cell_content = cell.trim();
+            cell1.textContent = cell_content;
+
+            let col_name = processString(cell_content);
+            const cell2 = newRow.insertCell();
+            cell2.innerHTML = '<input class="form-control" name="field_name' + i + '" type="text" value="' + col_name + '" />';
+
+            const cell2a = newRow.insertCell();
+            cell2a.classList.add('text-muted', 'overflow-hidden');
+            cell2a.style.width = '50px;'
+
+            let row_type = 'text';
+            if (data.length === 2 && data[1].length > i) {
+                demo_value = data[1][i];
+                cell2a.innerText = demo_value;
+
+                // try to suggest type
+                if (demo_value.toLowerCase() === 'true' || demo_value.toLowerCase() === 'false') {
+                    row_type = 'boolean';
+                } else if (/^\d+(\.|\,)\d+$/.test(demo_value)) {
+                    row_type = 'real';
+                } else if (!isNaN(demo_value) && !isNaN(parseFloat(demo_value))) {
+                    row_type = 'integer';
+                }
+
+                // TODO: Datum, Uhrzeit, DateTime - Was sind da Standard-CSV Formate?
+            }
+
+            const cell3 = newRow.insertCell();
+            cell3.innerHTML = '<select class="form-select" id="typeSel' + i + '" onchange="insertType(' + i + ')" value="' + row_type + '">\n' +
+                '<optgroup label="Booleans">\n' +
+                '    <option value="boolean" ' + is_selected(row_type, 'boolean') + '>Wahrheitswert (Boolean)</option>\n' +
+                '</optgroup><optgroup label="Ganzzahl">\n' +
+                '    <option value="integer" ' + is_selected(row_type, 'integer') + '>Ganzzahl (integer, [-2147483648, +2147483647])</option>\n' +
+                '    <option value="smallint">Ganzzahl (smallint, [-32768, +32767])</option>\n' +
+                '    <option value="bigint">Ganzzahl (bigint, [-9.2e18, , +9.2e18])</option></optgropup>\n' +
+                ' <optgroup label="Kommzahl">' +
+                '    <option value="float">Kommazahl (float)</option>\n' +
+                '    <option value="real" ' + is_selected(row_type, 'real') + '>Kommazahl (real, 6 decimal digits precision)</option>\n' +
+                '   <option value="decimal(9, 6)">Kommzahl mit gegebener Präzision</option>' +
+                ' </optgroup><optgroup label="Datum / Uhrzeit">' +
+                '   <option value="date">Datum (date)</option>\n' +
+                '    <option value="time">Uhrzeit (time)</option>\n' +
+                '    <option value="datetime">Datum mit Uhrzeit (datetime)</option>\n' +
+                '</optgroup><optgroup label="Text / Strings">\n' +
+                '    <option value="char(5)">String, fixe Länge, 5 Zeichen</option>\n' +
+                '    <option value="varchar(128)">String, variable, max. 128 Zeichen</option>\n' +
+                '    <option value="text" ' + is_selected(row_type, 'text') + '>String, beliebige Länge</option></optgroup>\n' +
+                '</select>';
+
+            const cell4 = newRow.insertCell();
+            cell4.innerHTML = '<input type="text" class="form-control" id="type' + i + '" name="type' + i + '" />';
+            insertType(i);
+
+            const cell5 = newRow.insertCell();
+            cell5.innerHTML = '<input type="checkbox" name="nullable' + i + '" value="1" />';
+
+            // so far this column always needs to be id; therefore no need to have a check like that,
+            /*const cell6 = newRow.insertCell();
+            let radio_box = '<input type="radio" name="primary" value="' + i + '"';
+            if (i === 0)
+                radio_box += 'checked="checked"';
+            radio_box += ' />';
+
+            cell6.innerHTML = radio_box;*/
+                ++i;
+        });
+        document.getElementById('total_rows').value = i;
+    }
+
+    function is_selected(rowType, type) {
+        if (rowType === type) {
+            return 'selected="selected"'
+        }
+        return '';
+    }
+
+    function insertType(rowNo) {
+        document.getElementById('type' + rowNo).value = document.getElementById('typeSel' + rowNo).value;
+    }
+
+    read_csv();
+</script>
+</body>
+</html>
+
+
