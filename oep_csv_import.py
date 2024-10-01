@@ -34,7 +34,11 @@ def main_post():
 
     columns = []
     for i in range(total_rows):
-        field_name = request.form.get('field_name%d' % i)
+        field_name = request.form.get('field_name%d' % i).strip()
+
+        if len(field_name) == 0:
+            continue
+
         field_type = request.form.get('type%d' % i)
         nullable = ('nullable%d' % i) in request.form
 
